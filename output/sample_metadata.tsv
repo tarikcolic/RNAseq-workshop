@@ -1,0 +1,7 @@
+sample_id	condition	batch	rin	libsize	libsize_millions	low_rin
+S1	control	A	9.1	24100000	24.1	FALSE
+S2	control	B	8.7	19800000	19.8	FALSE
+S3	control	A	9.4	27300000	27.3	FALSE
+S4	treated	B	7.9	2.2e+07	22	TRUE
+S5	treated	A	8.8	25500000	25.5	FALSE
+S6	treated	B	9	18200000	18.2	FALSE
