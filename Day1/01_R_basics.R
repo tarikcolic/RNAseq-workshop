@@ -551,7 +551,7 @@ length(batch_levels) # 2
 # return() explicitly is clearer for beginners.
 
 cpm <- function(counts_vector) {
-  # Counts Per Million: the simplest normalisation for library size.
+  # Counts Per Million: the simplest normalization for library size.
   # counts_vector : numeric vector of raw counts for ONE sample
   # returns       : numeric vector of CPM values
   total <- sum(counts_vector)
@@ -565,7 +565,7 @@ sum(cpm(raw))            # sums to 1e6 by construction — a good sanity check
 
 # DEFAULT ARGUMENTS: give sensible defaults so the common case is short.
 log_transform <- function(x, pseudocount = 1, base = 2) {
-  # log-transform expression values after adding a pseudocount, so that
+  # log-transform expression values after adding a pseudo-count, so that
   # zeros do not become -Inf.
   log(x + pseudocount, base = base)
 }
@@ -609,6 +609,20 @@ demo()
 # c) Write a function `summarise_gene(x)` that returns a NAMED vector with
 #    the mean, median and sd of x. Hint: c(mean = ..., median = ..., sd = ...)
 
+n_detected <- function(x, min_count = 1) {
+  sum(x >= min_count, na.rm = TRUE)
+}
+
+n_detected(c(0, 0, 3, 17, 0, 250))
+n_detected(c(0, 0, 3, 17, 0, 250), min_count = 10)
+
+summarise_gene <- function(x) {
+  c(mean = mean(x, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    sd = sd(x, na.rm = TRUE))
+}
+
+summarise_gene(c(1, 2, 3, 4, 5, 6))
 
 
 # ---- 7. Iteration: apply, sapply, and loops ---------------------------------
@@ -668,6 +682,15 @@ out
 # c) Convert m to CPM using your cpm() function from section 6 applied
 #    column-wise. Check that each column of the result sums to 1e6.
 
+cv_per_gene <- apply(m, 1, function(g) sd(g) / mean(g))
+cv_per_gene
+most_variable_gene <- names(cv_per_gene)[which.max(cv_per_gene)]
+most_variable_gene
+
+m_cpm <- apply(m, 2, cpm)
+m_cpm
+colSums(m_cpm)
+stopifnot(all.equal(colSums(m_cpm), rep(1e6, ncol(m_cpm))))
 
 
 # ---- 8. dplyr: a readable grammar for tables --------------------------------
@@ -759,6 +782,32 @@ head(tmp[, c("gene", "log2FC", "padj")], 10)
 #    (padj < 0.1) fall in each expression_class. What does the pattern
 #    tell you about statistical power vs expression level?
 
+sum(res_tbl$padj < 0.05, na.rm = TRUE)
+
+res_tbl <- res_tbl |>
+  mutate(expression_class = case_when(
+    baseMean < 50 ~ "low",
+    baseMean >= 50 & baseMean <= 500 ~ "medium",
+    baseMean > 500 ~ "high"
+  ))
+
+most_significant_15 <- res_tbl |>
+  arrange(padj) |>
+  select(gene, log2FC, padj) |>
+  head(15)
+
+most_significant_15
+
+significant_by_expression <- res_tbl |>
+  mutate(signif = padj < 0.1) |>
+  group_by(expression_class) |>
+  summarise(n_signif = sum(signif), .groups = "drop")
+
+significant_by_expression
+
+# Pattern: genes with higher average expression tend to have more significant
+# results because they are measured with lower sampling noise and therefore have
+# more statistical power than low-abundance genes.
 
 
 # ---- 9. ggplot2: building a figure layer by layer ---------------------------
@@ -889,6 +938,57 @@ ggsave("figures/volcano_demo.pdf", plot = p_volcano, width = 6, height = 4.5)
 #    subset of the data as its own data = argument.
 # e) Save your favourite figure as a 300-dpi PNG, 7 x 5 inches.
 
+# a) Histogram of mean expression on the log10 scale
+hist_base_mean <- ggplot(res_tbl, aes(x = log10(baseMean))) +
+  geom_histogram(bins = 30, fill = "steelblue", colour = "white") +
+  labs(x = expression(log[10]~mean~expression),
+       y = "number of genes") +
+  theme_bw(base_size = 12)
+
+hist_base_mean
+
+# b) Volcano plot with size by mean expression, colour by significance
+p_volcano_size <- ggplot(res_tbl,
+                        aes(x = log2FC, y = -log10(pvalue),
+                            colour = significant,
+                            size = log10(baseMean))) +
+  geom_point(alpha = 0.7) +
+  scale_colour_manual(values = c("FALSE" = "grey70", "TRUE" = "firebrick")) +
+  labs(x = expression(log[2]~fold~change),
+       y = expression(-log[10]~italic(p)),
+       colour = "Significant",
+       size = expression(log[10]~mean~expression)) +
+  theme_bw(base_size = 12)
+
+p_volcano_size
+
+# c) Facet by expression class
+p_volcano_facet <- p_volcano_size + facet_wrap(~ expression_class)
+
+p_volcano_facet
+
+# d) Label the 5 most significant genes
+label_genes <- res_tbl |>
+  arrange(padj) |>
+  head(5)
+
+p_volcano_labelled <- p_volcano_facet +
+  ggrepel::geom_text_repel(data = label_genes,
+                          aes(label = gene),
+                          box.padding = 0.4,
+                          max.overlaps = Inf,
+                          segment.colour = "grey40")
+
+p_volcano_labelled
+
+# e) Save a PNG at 300 dpi, 7 x 5 inches
+dir.create("figures", showWarnings = FALSE)
+
+ggsave("figures/exercise9_volcano.png",
+       plot = p_volcano_labelled,
+       width = 7,
+       height = 5,
+       dpi = 300)
 
 
 # ---- 10. Reproducibility: end every script like this ------------------------
