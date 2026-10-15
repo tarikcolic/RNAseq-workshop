@@ -1,0 +1,290 @@
+> library(DESeq2)
+> library(apeglm)
+> library(org.Hs.eg.db)
+> library(AnnotationDbi)
+> out_dir <- "analyses/results_DESeq2_parathyroid"
+> # =============================================================================
+> # READ THE DATA
+> # =============================================================================
+> # Both files are comma separated -> read.csv(). First column = row names.
+> counts  <- read.csv("Data/parathyroid_counts.csv",  row.names = 1, check.names = FALSE)
+> samples <- read.csv("Data/parathyroid_samples.csv", row.names = 1)
+> dim(counts)            # expect 63193 x 23
+[1] 63193    23
+> head(samples)
+              patient treatment time
+1_Control_24h       1   Control  24h
+1_Control_48h       1   Control  48h
+1_DPN_24h           1       DPN  24h
+1_DPN_48h           1       DPN  48h
+1_OHT_24h           1       OHT  24h
+1_OHT_48h           1       OHT  48h
+> # patient is stored as an INTEGER: it must be a factor, otherwise DESeq2
+> # would treat it as a continuous co-variate (one slope instead of 4 levels).
+> # First level = reference. Control and 24h are the references.
+> samples$patient   <- factor(samples$patient)
+> samples$treatment <- factor(samples$treatment, levels = c("Control", "DPN", "OHT"))
+> samples$time      <- factor(samples$time,      levels = c("24h", "48h"))
+> # Group sizes. Note patient 4 has no Control_24h -> design is unbalanced.
+> table(samples$treatment, samples$time)
+         
+          24h 48h
+  Control   3   4
+  DPN       4   4
+  OHT       4   4
+> table(samples$patient, samples$treatment)
+   
+    Control DPN OHT
+  1       2   2   2
+  2       2   2   2
+  3       2   2   2
+  4       1   2   2
+> # Counts columns and sample rows MUST match. Reorder defensively, then check.
+> counts <- counts[, rownames(samples)]
+> stopifnot(all(colnames(counts) == rownames(samples)))
+> # Gene annotation: keep ENSEMBL IDs as row names (symbols are not unique and
+> # some are NA), and store the symbol as an extra column to add to the output.
+> symbols <- mapIds(org.Hs.eg.db, keys = rownames(counts),
++                   keytype = "ENSEMBL", column = "SYMBOL", multiVals = "first")
+'select()' returned 1:many mapping between keys and columns
+> # Helper: attach symbol and save
+> save_res <- function(res, file) {
++   df <- as.data.frame(res)
++   df$symbol <- symbols[rownames(df)]
++   write.csv(df, file.path(out_dir, file))
++   invisible(df)
++ }
+> # Filter rule (same logic as the cichlid script): >= 10 counts in at least as
+> # many samples as the smallest group. Smallest treatment group = Control, n = 7.
+> min_n <- min(table(samples$treatment))   # 7
+> # =============================================================================
+> # ANALYSIS 1a - DPN vs Control, WITHOUT time:  ~ patient + treatment
+> # =============================================================================
+> dds1a <- DESeqDataSetFromMatrix(countData = counts, 
++                                 colData = samples,
++                                 design = ~ patient + treatment)
+> dds1a <- dds1a[rowSums(counts(dds1a) >= 10) >= min_n, ]
+> dds1a <- DESeq(dds1a)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+> resultsNames(dds1a)
+[1] "Intercept"                "patient_2_vs_1"           "patient_3_vs_1"          
+[4] "patient_4_vs_1"           "treatment_DPN_vs_Control" "treatment_OHT_vs_Control"
+> res1a <- results(dds1a, contrast = c("treatment", "DPN", "Control"), alpha = 0.05)
+> summary(res1a)
+
+out of 16202 with nonzero total read count
+adjusted p-value < 0.05
+LFC > 0 (up)       : 13, 0.08%
+LFC < 0 (down)     : 4, 0.025%
+outliers [1]       : 0, 0%
+low counts [2]     : 6283, 39%
+(mean count < 119)
+[1] see 'cooksCutoff' argument of ?results
+[2] see 'independentFiltering' argument of ?results
+
+> n1a <- sum(res1a$padj < 0.05, na.rm = TRUE)
+> n1a
+[1] 17
+> # =============================================================================
+> # ANALYSIS 1b - DPN vs Control, WITH time:  ~ patient + time + treatment
+> # The variable of interest goes LAST.
+> # =============================================================================
+> dds1b <- DESeqDataSetFromMatrix(countData = counts, colData = samples,
++                                 design = ~ patient + time + treatment)
+> dds1b <- dds1b[rowSums(counts(dds1b) >= 10) >= min_n, ]
+> dds1b <- DESeq(dds1b)
+estimating size factors
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+> resultsNames(dds1b)
+[1] "Intercept"                "patient_2_vs_1"           "patient_3_vs_1"          
+[4] "patient_4_vs_1"           "time_48h_vs_24h"          "treatment_DPN_vs_Control"
+[7] "treatment_OHT_vs_Control"
+> # ---- QC 1. Size factors ------------------------------------------------------
+> sizeFactors(dds1b)
+1_Control_24h 1_Control_48h     1_DPN_24h     1_DPN_48h     1_OHT_24h     1_OHT_48h 
+    0.9177582     1.0643765     0.5222812     0.9826090     0.5669380     0.7804575 
+2_Control_24h 2_Control_48h     2_DPN_24h     2_DPN_48h     2_OHT_24h     2_OHT_48h 
+    0.8286526     0.6591096     2.3950926     0.7902547     2.2776190     0.7857934 
+3_Control_24h 3_Control_48h     3_DPN_24h     3_DPN_48h     3_OHT_24h     3_OHT_48h 
+    0.7796704     0.8432665     1.3341038     1.7003651     2.4986102     0.7886176 
+4_Control_48h     4_DPN_24h     4_DPN_48h     4_OHT_24h     4_OHT_48h 
+    0.8124243     0.7620313     1.4508648     0.6542006     1.6685183 
+> summary(sizeFactors(dds1b))
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ 0.5223  0.7801  0.8287  1.1245  1.3925  2.4986 
+> max(sizeFactors(dds1b)) / min(sizeFactors(dds1b))
+[1] 4.784032
+> barplot(sizeFactors(dds1b), las = 2, cex.names = 0.5,
++         ylab = "size factor", main = "Size factors")
+> abline(h = 1, col = "red")
+> plot(colSums(counts(dds1b)) / 1e6, sizeFactors(dds1b),
++      xlab = "library size (million counts)", ylab = "size factor",
++      pch = 16, main = "Size factor vs library size")
+> boxplot(log2(counts(dds1b, normalized = TRUE) + 1), las = 2, cex.axis = 0.5,
++         ylab = "log2(normalised count + 1)", main = "Normalised counts")
+> # ---- QC 2. Dispersion --------------------------------------------------------
+> plotDispEsts(dds1b)
+> summary(dispersions(dds1b))
+     Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+0.0005507 0.0038336 0.0074455 0.0176139 0.0201855 0.7046562 
+> # ---- QC 3. Mean-variance before / after VST ---------------------------------
+> norm_counts <- counts(dds1b, normalized = TRUE)
+> plot(rowMeans(norm_counts), apply(norm_counts, 1, var), log = "xy",
++      pch = 16, cex = 0.3, xlab = "mean normalised count", ylab = "variance",
++      main = "Raw counts: variance depends on the mean")
+> abline(0, 1, col = "red")
+> dev.off()
+null device 
+          1 
+> plot(rowMeans(norm_counts), apply(norm_counts, 1, var), log = "xy",
++      pch = 16, cex = 0.3, xlab = "mean normalised count", ylab = "variance",
++      main = "Raw counts: variance depends on the mean")
+> abline(0, 1, col = "red")
+> vsd <- vst(dds1b, blind = FALSE)
+> vst_mat <- assay(vsd)
+> plot(rowMeans(vst_mat), apply(vst_mat, 1, sd), pch = 16, cex = 0.3,
++      xlab = "mean of VST values", ylab = "standard deviation",
++      main = "After VST: spread is roughly flat")
+> # ---- QC 4. Cook's distance ---------------------------------------------------
+> # Only 2-4 replicates per cell, so DESeq2 will not auto-replace outliers
+> # (needs >= 7 per group): just note any sample with a much higher box.
+> boxplot(log10(assays(dds1b)[["cooks"]]), range = 0, las = 2, cex.axis = 0.5,
++         ylab = "log10 Cook's distance", main = "Cook's distance per sample")
+> # ---- QC 5. Sparsity ----------------------------------------------------------
+> plotSparsity(dds1b)
+> # ---- QC 6. PCA: does the biggest axis match the design? ---------------------
+> # Expectation: PC1 = time (the large time-in-culture effect), PC2 = patient,
+> # treatment barely visible. That is exactly why time belongs in the model.
+> plotPCA(vsd, intgroup = c("time", "treatment"))
+using ntop=500 top features by variance
+> plotPCA(vsd, intgroup = c("patient", "time"))
+using ntop=500 top features by variance
+> sample_dist <- dist(t(vst_mat))
+Found more than one class "dist" in cache; using the first, from namespace 'spam'
+Also defined by ‘BiocGenerics’
+> plot(hclust(sample_dist),
++      labels = paste(samples$patient, samples$treatment, samples$time),
++      cex = 0.6, main = "Sample clustering (VST, Euclidean)")
+> # =============================================================================
+> # ANALYSIS 1b - results
+> # =============================================================================
+> res1b <- results(dds1b, contrast = c("treatment", "DPN", "Control"), alpha = 0.05)
+> summary(res1b)
+
+out of 16202 with nonzero total read count
+adjusted p-value < 0.05
+LFC > 0 (up)       : 67, 0.41%
+LFC < 0 (down)     : 68, 0.42%
+outliers [1]       : 0, 0%
+low counts [2]     : 5654, 35%
+(mean count < 95)
+[1] see 'cooksCutoff' argument of ?results
+[2] see 'independentFiltering' argument of ?results
+
+> n1b <- sum(res1b$padj < 0.05, na.rm = TRUE)
+> n1b
+[1] 135
+> # Compare the two models: same reads, different number of hits
+> c(without_time = n1a, with_time = n1b, fold_change = n1b / n1a)
+without_time    with_time  fold_change 
+   17.000000   135.000000     7.941176 
+> # Shrunken fold changes (apeglm needs a coefficient; Control is the reference
+> # so the coefficient is treatment_DPN_vs_Control)
+> res1b_shrunk <- lfcShrink(dds1b, coef = "treatment_DPN_vs_Control", type = "apeglm")
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+> res1b_shrunk <- res1b_shrunk[order(res1b_shrunk$padj), ]
+> head(res1b_shrunk)
+log2 fold change (MAP): treatment DPN vs Control 
+Wald test p-value: treatment DPN vs Control 
+DataFrame with 6 rows and 5 columns
+                 baseMean log2FoldChange     lfcSE      pvalue        padj
+                <numeric>      <numeric> <numeric>   <numeric>   <numeric>
+ENSG00000091137  1003.742      -0.526018 0.0965914 2.70281e-09 9.50306e-06
+ENSG00000128590   307.022       0.427348 0.0782851 2.20329e-09 9.50306e-06
+ENSG00000168014   484.247      -0.288904 0.0524174 1.56140e-09 9.50306e-06
+ENSG00000127022  8007.087       0.240413 0.0473142 1.80597e-08 4.76233e-05
+ENSG00000138434  1566.752      -0.214948 0.0455987 1.30218e-07 2.74709e-04
+ENSG00000044574  4929.525       0.398462 0.0925787 3.94631e-07 4.32695e-04
+> # ---- QC 7. p-value histograms (raw p-values) --------------------------------
+> par(mfrow = c(1, 2))
+> hist(res1a$pvalue, breaks = 50, col = "grey", xlab = "raw p-value",
++      main = "DPN vs Control: ~ patient + treatment")
+> hist(res1b$pvalue, breaks = 50, col = "grey", xlab = "raw p-value",
++      main = "DPN vs Control: ~ patient + time + treatment")
+> par(mfrow = c(1, 1))
+> plotMA(res1b_shrunk, ylim = c(-5, 5))
+> plotCounts(dds1b, gene = rownames(res1b_shrunk)[1], intgroup = c("treatment", "time"))
+> # =============================================================================
+> # ANALYSIS 2 - OHT vs Control (same full model as 1b; an honest negative result)
+> # =============================================================================
+> resultsNames(dds1b)
+[1] "Intercept"                "patient_2_vs_1"           "patient_3_vs_1"          
+[4] "patient_4_vs_1"           "time_48h_vs_24h"          "treatment_DPN_vs_Control"
+[7] "treatment_OHT_vs_Control"
+> res2 <- results(dds1b, contrast = c("treatment", "OHT", "Control"), alpha = 0.05)
+> summary(res2)
+
+out of 16202 with nonzero total read count
+adjusted p-value < 0.05
+LFC > 0 (up)       : 6, 0.037%
+LFC < 0 (down)     : 7, 0.043%
+outliers [1]       : 0, 0%
+low counts [2]     : 0, 0%
+(mean count < 5)
+[1] see 'cooksCutoff' argument of ?results
+[2] see 'independentFiltering' argument of ?results
+
+> n2 <- sum(res2$padj < 0.05, na.rm = TRUE)
+> n2
+[1] 13
+> hist(res2$pvalue, breaks = 50, col = "grey", xlab = "raw p-value",
++      main = "OHT vs Control: p-value histogram")
+> res2_shrunk <- lfcShrink(dds1b, coef = "treatment_OHT_vs_Control", type = "apeglm")
+using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+    Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+    sequence count data: removing the noise and preserving large differences.
+    Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+> res2_shrunk <- res2_shrunk[order(res2_shrunk$padj), ]
+> head(res2_shrunk)
+log2 fold change (MAP): treatment OHT vs Control 
+Wald test p-value: treatment OHT vs Control 
+DataFrame with 6 rows and 5 columns
+                 baseMean log2FoldChange     lfcSE      pvalue      padj
+                <numeric>      <numeric> <numeric>   <numeric> <numeric>
+ENSG00000143127   35.2706      -0.878609 0.2074476 8.25624e-07 0.0133768
+ENSG00000133048   60.0889      -0.701958 0.1818511 4.28375e-06 0.0231351
+ENSG00000148795   96.7423      -0.889967 0.2299395 3.68523e-06 0.0231351
+ENSG00000108551   62.6614       0.589677 0.1593322 8.41921e-06 0.0265790
+ENSG00000168615 4241.6318       0.119652 0.0333648 7.97922e-06 0.0265790
+ENSG00000175048  365.8708       0.275878 0.0751868 9.84286e-06 0.0265790
+> plotMA(res2_shrunk, ylim = c(-5, 5))
+> # =============================================================================
+> # OVERVIEW PCA
+> # =============================================================================
+> vsd_blind <- vst(dds1b, blind = TRUE)
+> png(file.path(out_dir, "00_PCA.png"), width = 1800, height = 1300, res = 240)
+> print(plotPCA(vsd_blind, intgroup = c("treatment", "time")))
+using ntop=500 top features by variance
+> dev.off()
+RStudioGD 
+        2 
+> # =============================================================================
+> # SUMMARY
+> # =============================================================================
+> c(DPN_vs_Control_no_time   = n1a,   # 1a
++   DPN_vs_Control_with_time = n1b,   # 1b
++   OHT_vs_Control           = n2)    # 2
+  DPN_vs_Control_no_time DPN_vs_Control_with_time           OHT_vs_Control 
+                      17                      135                       13 
